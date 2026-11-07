@@ -292,7 +292,7 @@ def test_tools_end_to_end(tmp_path):
     with pytest.raises(ToolError):
         T["schedule_add"].func({"label": "晨报", "prompt": "x", "time": "7:30"}, ctx)
     assert "已删除" in T["schedule_remove"].func({"target": "晨报"}, ctx).text
-    assert "没有定时任务" in T["schedule_list"].func({}, ctx).text
+    assert "没有待执行" in T["schedule_list"].func({}, ctx).text
     with pytest.raises(ToolError):
         T["schedule_remove"].func({"target": "晨报"}, ctx)
 
@@ -314,3 +314,32 @@ def test_server_passes_tz_to_tools(server, tmp_path):
     assert st == 200 and "Asia/Shanghai" in res["text"]
     st, res = c.req("POST", "/v1/tools/schedule_add", {"arguments": {"label": "L2", "prompt": "P", "time": "9", "days": ["funday"]}})
     assert st == 400
+
+
+def test_history_survives_one_off_deletion_and_restart(store, tmp_path):
+    add(store, label="once", on="2099-01-05")
+    s, _ = sched(store, utc(2099, 1, 5, 7, 31), lambda t: None)
+    s.tick()
+    assert store.list() == [] and store.history[-1]["ok"] and store.history[-1]["label"] == "once"
+    again = ScheduleStore(tmp_path / "schedules.json")
+    assert again.history[-1]["label"] == "once"
+
+
+def test_history_records_failures_and_is_capped(store):
+    add(store)
+    s, clock = sched(store, utc(2026, 11, 7, 7, 30), lambda t: (_ for _ in ()).throw(PermanentError("401")))
+    s.tick()
+    assert store.history[-1]["ok"] is False and "401" in store.history[-1]["detail"]
+    for i in range(30):
+        store.record({"label": "x", "id": "i", "tz": "UTC"}, True)
+    assert len(store.history) == 10
+
+
+def test_list_tool_shows_history(tmp_path):
+    from mnemo_plugin.registry import all_tools
+    from mnemo_plugin.scheduler import get_store
+
+    ctx = tool_ctx(tmp_path)
+    get_store(ctx.config).record({"label": "晨报", "id": "a1", "tz": "America/Vancouver"}, True, "ok")
+    out = all_tools()["schedule_list"].func({}, ctx).text
+    assert "没有待执行" in out and "已提交「晨报」" in out

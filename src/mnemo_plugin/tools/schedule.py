@@ -5,7 +5,7 @@ import os
 
 from ..config import Config
 from ..registry import Context, Result, ToolError, tool
-from ..scheduler import DAYS, MAX_LABEL, MAX_PROMPT, ScheduleError, describe, get_store
+from ..scheduler import DAYS, MAX_LABEL, MAX_PROMPT, ScheduleError, describe, describe_history, get_store
 
 
 def _available(cfg: Config) -> str | None:
@@ -45,13 +45,16 @@ def schedule_add(args: dict, ctx: Context) -> Result:
     return Result(text="已创建：\n" + describe(t))
 
 
-@tool("schedule_list", "列出所有定时任务（名称、时间、完整指令、上次执行）。用户问“有哪些定时任务”或要取消前需要确认时使用。",
+@tool("schedule_list", "列出所有定时任务（名称、时间、完整指令、上次执行）和最近几次执行记录。用户问“有哪些定时任务”、要取消前确认、或追查某个任务有没有执行时使用。",
       available=_available)
 def schedule_list(args: dict, ctx: Context) -> Result:
-    tasks = get_store(ctx.config).list()
-    if not tasks:
-        return Result(text="目前没有定时任务。")
-    return Result(text="\n".join(describe(t) for t in tasks))
+    st = get_store(ctx.config)
+    tasks, hist = st.list(), list(st.history)
+    parts = ["\n".join(describe(t) for t in tasks) if tasks else "目前没有待执行的定时任务。"]
+    if hist:
+        parts.append("最近执行记录（一次性任务执行后会从上面的列表消失，只在这里留痕；“已提交”表示已交给 mnemo，结果会发到 Telegram）：\n"
+                     + "\n".join(describe_history(h) for h in hist[-5:]))
+    return Result(text="\n\n".join(parts))
 
 
 @tool("schedule_remove", "删除一个定时任务。target 填任务名称或 id（见 schedule_list）。用户说“取消晨报”之类时使用。",

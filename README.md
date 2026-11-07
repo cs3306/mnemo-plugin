@@ -117,7 +117,7 @@ POST /v1/tools/{name}
 - 还不能**读取**用户发来的文件（Word / PDF / Excel 的内容）——这需要 mnemo 先支持接收文件，后续再做。
 - Excel 里的公式不在服务端计算，要在 Excel / WPS 打开时才有结果（Telegram 内置预览看不到）。
 - PowerPoint 使用 pandoc 默认模板，中文字体由 PowerPoint 自动回退；版式朴素。
-- 已验证环境：Ubuntu 24.04（pandoc 3.1、TeX Live 2023、Python 3.12）上的 49 项测试。**Dockerfile 与 GitHub Actions 的构建流程没有实际构建过**，首次构建请留意日志；`image_generate` 只对照假后端测过，没连过真实的图像服务。
+- 已验证环境：Ubuntu 24.04（pandoc 3.1、TeX Live 2023、Python 3.12）上的 52 项测试。**Dockerfile 与 GitHub Actions 的构建流程没有实际构建过**，首次构建请留意日志；`image_generate` 只对照假后端测过，没连过真实的图像服务。
 
 ### 开发
 
@@ -238,7 +238,7 @@ Tool names match `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$` and must not collide with mnemo
 - It cannot yet **read** files the user sends (Word / PDF / Excel); that needs mnemo to accept incoming files first.
 - Excel formulas are not evaluated on the server; they calculate when opened in Excel / WPS (Telegram's preview shows blanks).
 - PowerPoint uses pandoc's default template: plain layout, CJK font left to PowerPoint's fallback.
-- Verified: 49 tests on Ubuntu 24.04 (pandoc 3.1, TeX Live 2023, Python 3.12). **The Dockerfile and the GitHub Actions build have not actually been run**; watch the first build's log. `image_generate` was tested against a fake backend only, not a real image service.
+- Verified: 52 tests on Ubuntu 24.04 (pandoc 3.1, TeX Live 2023, Python 3.12). **The Dockerfile and the GitHub Actions build have not actually been run**; watch the first build's log. `image_generate` was tested against a fake backend only, not a real image service.
 
 ### Development
 

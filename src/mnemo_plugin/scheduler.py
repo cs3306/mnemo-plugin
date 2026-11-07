@@ -26,6 +26,7 @@ log = logging.getLogger("mnemo_plugin.schedule")
 
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 MAX_TASKS = 20
+MAX_HISTORY = 10
 MAX_PROMPT = 2000
 MAX_LABEL = 40
 TICK_SECONDS = 20
@@ -57,12 +58,14 @@ class ScheduleStore:
         self.path = Path(path)
         self.lock = threading.RLock()
         self.tasks: list[dict] = []
+        self.history: list[dict] = []     # most recent runs, newest last; survives one-off tasks being deleted
         self._load()
 
     def _load(self) -> None:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             self.tasks = [t for t in raw.get("tasks", []) if isinstance(t, dict) and t.get("id") and t.get("prompt")]
+            self.history = [h for h in raw.get("history", []) if isinstance(h, dict)][-MAX_HISTORY:]
         except FileNotFoundError:
             self.tasks = []
         except (OSError, ValueError) as e:
@@ -81,7 +84,7 @@ class ScheduleStore:
             fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".schedules-", suffix=".tmp")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump({"version": 1, "tasks": self.tasks}, f, ensure_ascii=False, indent=1)
+                    json.dump({"version": 1, "tasks": self.tasks, "history": self.history}, f, ensure_ascii=False, indent=1)
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp, self.path)
@@ -153,9 +156,24 @@ class ScheduleStore:
             self.save()
             return [hit[0]]
 
+    def record(self, task: dict, ok: bool, detail: str = "") -> None:
+        """Remember a final outcome (the caller saves). Transient failures that will be retried are not recorded."""
+        with self.lock:
+            try:
+                now = datetime.now(get_zone(task.get("tz", "UTC")))
+            except ScheduleError:
+                now = datetime.now(timezone.utc)
+            self.history.append({"label": task["label"], "id": task["id"], "when": now.strftime("%m-%d %H:%M ") + str(now.tzinfo),
+                                 "ok": ok, "detail": detail[:200]})
+            del self.history[:-MAX_HISTORY]
+
     def list(self) -> list[dict]:
         with self.lock:
             return [dict(t) for t in self.tasks]
+
+
+def describe_history(h: dict) -> str:
+    return f"{h.get('when', '?')} {'已提交' if h.get('ok') else '失败'}「{h.get('label', '?')}」{h.get('detail', '')}"
 
 
 def describe(t: dict) -> str:
@@ -258,6 +276,7 @@ class Scheduler(threading.Thread):
                 continue
             if now - at.astimezone(timezone.utc) > grace:
                 if t.get("date"):          # a one-off we missed for good
+                    self.store.record(t, False, f"错过了 {key} {t['time']}，已删除")
                     self._finish(t["id"], drop=True, error=f"错过了 {key} {t['time']}，已删除")
                     changed = True
                 self._retry.pop(t["id"], None)
@@ -269,6 +288,7 @@ class Scheduler(threading.Thread):
                 self.trigger(t)
             except PermanentError as e:
                 log.error("task %s (%s): %s", t["id"], t["label"], e)
+                self.store.record(t, False, str(e))
                 self._finish(t["id"], fired=key, error=str(e), drop=bool(t.get("date")))
                 self._retry.pop(t["id"], None)
             except TransientError as e:
@@ -279,6 +299,7 @@ class Scheduler(threading.Thread):
                 self._finish(t["id"], error=str(e))
             else:
                 log.info("task %s (%s) fired for %s", t["id"], t["label"], key)
+                self.store.record(t, True, f"已提交给 mnemo（{key} {t['time']}）")
                 self._finish(t["id"], fired=key, drop=bool(t.get("date")), error="")
                 self._retry.pop(t["id"], None)
             changed = True
