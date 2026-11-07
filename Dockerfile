@@ -19,6 +19,8 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir . && rm -rf /src
 
+RUN mkdir /data && chown 65532:65532 /data      # schedules.json lives here; mount a volume over it
+ENV DATA_DIR=/data
 ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PLUGIN_ADDR=0.0.0.0:8090
 USER 65532:65532
 WORKDIR /tmp

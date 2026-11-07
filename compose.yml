@@ -10,6 +10,7 @@ services:
       EXTRA_TOOLS_DIR: /extra_tools
     volumes:
       - ./extra_tools:/extra_tools:ro        # your own tools (*.py), see README
+      - plugin-data:/data                    # scheduled tasks (schedules.json)
     ports:
       - "127.0.0.1:8090:8090"                # remove if only other containers need it
     read_only: true
@@ -18,3 +19,6 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     mem_limit: 2g
+
+volumes:
+  plugin-data:

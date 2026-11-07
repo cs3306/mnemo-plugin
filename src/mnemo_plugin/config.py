@@ -42,6 +42,11 @@ class Config:
     image_size: str = "1024x1024"
     image_extra_body: dict = field(default_factory=dict)
     image_timeout: int = 300
+    mnemo_url: str = ""              # where mnemo's API listens (http://mnemo:8088); needed by the schedule_* tools
+    mnemo_api_key: str = ""          # mnemo's API_KEY
+    data_dir: str = "/data"          # persistent state (schedules.json); mount a volume here
+    schedule_tz: str = ""            # fallback time zone when mnemo does not send one ("" = UTC)
+    schedule_grace_min: int = 120    # a task missed by more than this (e.g. server was down) is skipped, not run late
     errors: list = field(default_factory=list)
 
     @classmethod
@@ -66,6 +71,11 @@ class Config:
         c.image_model = e.get("IMAGE_MODEL", "").strip()
         c.image_size = e.get("IMAGE_SIZE", c.image_size).strip()
         c.image_timeout = max(10, _int("IMAGE_TIMEOUT", 300, e))
+        c.mnemo_url = e.get("MNEMO_URL", "").strip().rstrip("/")
+        c.mnemo_api_key = e.get("MNEMO_API_KEY", "").strip()
+        c.data_dir = e.get("DATA_DIR", c.data_dir).strip() or c.data_dir
+        c.schedule_tz = e.get("SCHEDULE_TZ", "").strip()
+        c.schedule_grace_min = max(1, _int("SCHEDULE_GRACE_MIN", 120, e))
         raw = e.get("IMAGE_EXTRA_BODY", "").strip()
         if raw:
             try:
@@ -83,4 +93,13 @@ class Config:
             errs.append("PLUGIN_TOKEN is not set (set it, or PLUGIN_ALLOW_ANONYMOUS=true if the port is not reachable by anyone else)")
         if self.image_base_url and not self.image_base_url.startswith(("http://", "https://")):
             errs.append("IMAGE_BASE_URL must be an http(s) URL")
+        if self.mnemo_url and not self.mnemo_url.startswith(("http://", "https://")):
+            errs.append("MNEMO_URL must be an http(s) URL")
+        if self.schedule_tz:
+            try:
+                from zoneinfo import ZoneInfo
+
+                ZoneInfo(self.schedule_tz)
+            except Exception:
+                errs.append(f"SCHEDULE_TZ {self.schedule_tz!r} is not a valid time zone name")
         return errs

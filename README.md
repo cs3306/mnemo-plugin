@@ -18,6 +18,7 @@
 | `pdf_create` | Markdown → PDF（XeLaTeX，中文、公式、代码块、目录） | pandoc + XeLaTeX |
 | `latex_create` | 编译完整 `.tex`（xelatex / lualatex / pdflatex），失败时把日志里的错误返回给模型重试，成功时 PDF 与源码一起发出 | TeX Live |
 | `image_generate` | 调用 OpenAI 兼容的 `/images/generations`（本地 Stable Diffusion / FLUX 网关等） | 需要你自己有图像后端 |
+| `schedule_add` / `schedule_list` / `schedule_remove` | 定时任务：对 bot 说“每天 7:30 给我发晨报，内容是……”，它自己建；说“取消晨报”就删。到点由本服务调用 mnemo 的 `/v1/trigger`，bot 带着记忆、搜索和其它工具完成任务并发到 Telegram | mnemo 开启 API（`MNEMO_URL`、`MNEMO_API_KEY`）+ 数据卷 |
 
 DeepSeek 没有图像生成模型，所以 `image_generate` 只有在设置了 `IMAGE_BASE_URL` 时才出现。缺少依赖的工具不会出现在列表里，原因见 `GET /healthz`。
 
@@ -50,7 +51,21 @@ PLUGIN_TOKEN=<与上面相同，openssl rand -hex 24 生成>
 
 ### 配置（环境变量）
 
-见 [`.env.example`](.env.example)。常用的：`PLUGIN_TOKEN`（必填；不设置服务拒绝启动，除非 `PLUGIN_ALLOW_ANONYMOUS=true`）、`MAX_CONCURRENCY`（同时处理的调用数，默认 2）、`TOOL_TIMEOUT`、`MAX_FILE_MB`（默认 30，Telegram 机器人上限 50）、`DOCX_CJK_FONT`、`PDF_CJK_FONT`、`IMAGE_*`。
+见 [`.env.example`](.env.example)。常用的：`PLUGIN_TOKEN`（必填；不设置服务拒绝启动，除非 `PLUGIN_ALLOW_ANONYMOUS=true`）、`MAX_CONCURRENCY`（同时处理的调用数，默认 2）、`TOOL_TIMEOUT`、`MAX_FILE_MB`（默认 30，Telegram 机器人上限 50）、`DOCX_CJK_FONT`、`PDF_CJK_FONT`、`IMAGE_*`、`MNEMO_URL` / `MNEMO_API_KEY` / `DATA_DIR`（定时任务）。
+
+### 定时任务
+
+需要 mnemo ≥ 带 `POST /v1/trigger` 的版本。mnemo 侧：`.env` 里 `API_ADDR=:8088` 和 `API_KEY=…`（不要把该端口暴露到公网）。本服务侧：
+
+```
+MNEMO_URL=http://mnemo:8088
+MNEMO_API_KEY=<与 mnemo 的 API_KEY 相同>
+DATA_DIR=/data                    # 镜像里默认；compose 里挂一个卷，任务才能在重启后保留
+SCHEDULE_TZ=                      # 可选；留空则用 mnemo 的 TZ（每次调用都会带过来）
+SCHEDULE_GRACE_MIN=120            # 服务停机错过的任务，在这个窗口内补发，超过就跳过
+```
+
+任务存在 `$DATA_DIR/schedules.json`（原子写入）。支持“每天”、“每周几”、“某天一次”，精度到分钟，最多 20 个；mnemo 暂时连不上时指数退避重试，4xx（如密钥错误）不重试并记在 `last_error`（`schedule_list` 可见）。**到点跑的 prompt 是模型当时写下的**，其中可能混入网页里的注入内容，所以建任务后用 `schedule_list` 看一眼完整指令。
 
 ### 自己写工具
 
@@ -102,7 +117,7 @@ POST /v1/tools/{name}
 - 还不能**读取**用户发来的文件（Word / PDF / Excel 的内容）——这需要 mnemo 先支持接收文件，后续再做。
 - Excel 里的公式不在服务端计算，要在 Excel / WPS 打开时才有结果（Telegram 内置预览看不到）。
 - PowerPoint 使用 pandoc 默认模板，中文字体由 PowerPoint 自动回退；版式朴素。
-- 已验证环境：Ubuntu 24.04（pandoc 3.1、TeX Live 2023、Python 3.12）上的 29 项测试。**Dockerfile 与 GitHub Actions 的构建流程没有实际构建过**，首次构建请留意日志；`image_generate` 只对照假后端测过，没连过真实的图像服务。
+- 已验证环境：Ubuntu 24.04（pandoc 3.1、TeX Live 2023、Python 3.12）上的 49 项测试。**Dockerfile 与 GitHub Actions 的构建流程没有实际构建过**，首次构建请留意日志；`image_generate` 只对照假后端测过，没连过真实的图像服务。
 
 ### 开发
 
@@ -160,6 +175,20 @@ Restart, then send `/plugins` to the bot to see the discovered tools, and ask fo
 
 See [`.env.example`](.env.example). Main ones: `PLUGIN_TOKEN` (required; the server refuses to start without it unless `PLUGIN_ALLOW_ANONYMOUS=true`), `MAX_CONCURRENCY` (default 2), `TOOL_TIMEOUT`, `MAX_FILE_MB` (default 30; Telegram bots allow 50), `DOCX_CJK_FONT`, `PDF_CJK_FONT`, `IMAGE_*`.
 
+### Scheduled tasks
+
+Needs a mnemo build with `POST /v1/trigger`. On mnemo set `API_ADDR=:8088` and `API_KEY=…` (never expose that port to the internet). Here:
+
+```
+MNEMO_URL=http://mnemo:8088
+MNEMO_API_KEY=<same as mnemo's API_KEY>
+DATA_DIR=/data                    # default in the image; mount a volume or tasks vanish on recreate
+SCHEDULE_TZ=                      # optional; empty = mnemo's TZ (sent with every call)
+SCHEDULE_GRACE_MIN=120            # a task missed while this server was down is still run within this window, else skipped
+```
+
+Tasks live in `$DATA_DIR/schedules.json` (atomic writes). Daily, weekly (chosen weekdays) or one-off, minute precision, at most 20. If mnemo is unreachable the call is retried with exponential backoff; 4xx (e.g. wrong key) is not retried and shows up as `last_error` in `schedule_list`. **The prompt that runs is whatever the model wrote at creation time** and may contain text injected from a web page, so check the full instruction with `schedule_list` after creating a task.
+
 ### Writing your own tools
 
 **Python**: drop a `.py` file into a directory mounted at `EXTRA_TOOLS_DIR` (compose: `./extra_tools:/extra_tools:ro`), restart the plugin container, send `/plugins reload`. No change to this project and no image rebuild.
@@ -209,7 +238,7 @@ Tool names match `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$` and must not collide with mnemo
 - It cannot yet **read** files the user sends (Word / PDF / Excel); that needs mnemo to accept incoming files first.
 - Excel formulas are not evaluated on the server; they calculate when opened in Excel / WPS (Telegram's preview shows blanks).
 - PowerPoint uses pandoc's default template: plain layout, CJK font left to PowerPoint's fallback.
-- Verified: 29 tests on Ubuntu 24.04 (pandoc 3.1, TeX Live 2023, Python 3.12). **The Dockerfile and the GitHub Actions build have not actually been run**; watch the first build's log. `image_generate` was tested against a fake backend only, not a real image service.
+- Verified: 49 tests on Ubuntu 24.04 (pandoc 3.1, TeX Live 2023, Python 3.12). **The Dockerfile and the GitHub Actions build have not actually been run**; watch the first build's log. `image_generate` was tested against a fake backend only, not a real image service.
 
 ### Development
 

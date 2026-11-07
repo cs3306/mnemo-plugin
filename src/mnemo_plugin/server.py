@@ -2,7 +2,7 @@
 
     GET  /healthz                 -> {"ok": true, ...}                     (no auth)
     GET  /v1/tools                -> {"tools": [{"name", "description", "parameters"}]}
-    POST /v1/tools/{name}         <- {"arguments": {...}, "context": {"chat": 1, "channel": "telegram"}}
+    POST /v1/tools/{name}         <- {"arguments": {...}, "context": {"chat": 1, "channel": "telegram", "tz": "America/Vancouver"}}
                                   -> {"text": "...", "files": [{"name", "mime", "data": "<base64>"}]}  or {"error": "..."}
 
 Every /v1 request needs "Authorization: Bearer $PLUGIN_TOKEN".
@@ -99,7 +99,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": "body must be {\"arguments\": {...}, \"context\": {...}}"})
         try:
             validate(args, tool.parameters)
-            ctx = Context(config=self.server.cfg, chat=c.get("chat") if isinstance(c.get("chat"), int) else None, channel=str(c.get("channel", "")))
+            ctx = Context(config=self.server.cfg, chat=c.get("chat") if isinstance(c.get("chat"), int) else None, channel=str(c.get("channel", "")), tz=str(c.get("tz", "")))
             with self.server.slots:
                 res = tool.func(args, ctx)
             if not isinstance(res, Result):

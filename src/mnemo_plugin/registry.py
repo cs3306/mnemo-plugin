@@ -32,6 +32,7 @@ class Context:
     config: Config
     chat: int | None = None
     channel: str = ""     # "telegram" or "api"
+    tz: str = ""          # the user's IANA time zone as configured in mnemo ("" = unknown)
 
 
 @dataclass

@@ -7,6 +7,7 @@ import threading
 
 from .config import Config
 from .loader import load_builtin, load_extra
+from .scheduler import Scheduler, get_store
 from .server import PluginServer
 
 
@@ -27,6 +28,10 @@ def main() -> int:
     log.info("tools: %s", ", ".join(sorted(srv.tools)) or "(none)")
     for name, why in srv.disabled.items():
         log.warning("tool %s disabled: %s", name, why)
+    sched = None
+    if "schedule_add" in srv.tools:
+        sched = Scheduler(get_store(cfg), cfg)
+        sched.start()
     if not cfg.token:
         log.warning("running WITHOUT authentication (PLUGIN_ALLOW_ANONYMOUS=true)")
 
@@ -38,6 +43,8 @@ def main() -> int:
     log.info("listening on %s:%d", cfg.host, cfg.port)
     srv.serve_forever()
     srv.server_close()
+    if sched:
+        sched.stop()
     return 0
 
 
