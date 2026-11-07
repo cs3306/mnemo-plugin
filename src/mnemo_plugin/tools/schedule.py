@@ -22,7 +22,7 @@ def _available(cfg: Config) -> str | None:
 
 @tool("schedule_add",
       "创建一个定时任务：到点时系统会像用户刚发来一条消息那样，让你（带记忆、搜索和其它工具）完成 prompt 并把结果发给用户。"
-      "只在用户明确要求“每天/每周/某天几点……”时才创建，不要自作主张。prompt 要写成自包含的完整指令（到点时看不到现在的对话），"
+      "只在用户明确要求“每天/每周/某天几点……”时才创建，不要自作主张。必须先调用本工具，成功后再告诉用户；不要先说“我去建/稍等”就结束回复。prompt 要写成自包含的完整指令（到点时看不到现在的对话），"
       "例如“搜索今天的重要新闻和天气，按 3-5 条要点写成晨报”。时间用用户所在时区的 24 小时制。创建后向用户复述名称和时间。",
       {"type": "object", "properties": {
           "label": {"type": "string", "maxLength": MAX_LABEL, "description": "简短名称，如“晨报”，用户之后靠它取消"},
@@ -42,7 +42,9 @@ def schedule_add(args: dict, ctx: Context) -> Result:
                                on=args.get("date"), tz=tz, chat=chat)
     except ScheduleError as e:
         raise ToolError(str(e)) from None
-    return Result(text="已创建：\n" + describe(t))
+    return Result(
+        text="已创建：\n" + describe(t) + "\n（系统已经把创建结果直接发给用户了，你不必复述细节；简短回应一句即可。任务到点后结果会自动发给用户。）",
+        notify="✅ 已创建定时任务\n" + describe(t))
 
 
 @tool("schedule_list", "列出所有定时任务（名称、时间、完整指令、上次执行）和最近几次执行记录。用户问“有哪些定时任务”、要取消前确认、或追查某个任务有没有执行时使用。",
@@ -65,4 +67,5 @@ def schedule_remove(args: dict, ctx: Context) -> Result:
         gone = get_store(ctx.config).remove(args["target"])
     except ScheduleError as e:
         raise ToolError(str(e)) from None
-    return Result(text=f"已删除「{gone[0]['label']}」。")
+    return Result(text=f"已删除「{gone[0]['label']}」。（系统已经通知用户，简短回应即可。）",
+                  notify=f"🗑 已删除定时任务「{gone[0]['label']}」")

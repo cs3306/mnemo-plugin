@@ -109,7 +109,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # never leak a traceback to the model; it stays in the log
             log.exception("tool %s crashed", tool.name)
             return self._send(500, {"error": "插件内部错误，详情见服务日志"})
-        self._send(200, {"text": res.text, "files": [
+        self._send(200, {"text": res.text, **({"notify": res.notify} if res.notify else {}), "files": [
             {"name": f.name, "mime": f.mime, "data": base64.b64encode(f.data).decode()} for f in res.files
         ]})
 

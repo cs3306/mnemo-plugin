@@ -81,7 +81,7 @@ from mnemo_plugin import tool, Result, File, ToolError
 })
 def word_count(args, ctx):          # ctx.chat / ctx.channel / ctx.config
     n = len(args["text"].split())
-    return Result(text=f"{n} 个词")            # 要发文件：Result(text=..., files=[File(name, mime, bytes)])
+    return Result(text=f"{n} 个词")            # 要发文件：Result(text=..., files=[File(name, mime, bytes)])，Result(notify="…") 会立刻原样发给用户（仅 Telegram）
 ```
 
 参数按 JSON Schema 的常用子集校验（type、required、enum、items、minItems/maxItems、maxLength），出错时模型会看到明确的中文提示。抛出 `ToolError("原因")` 会把原因原样交给模型，让它修正后重试；其他异常只写日志，不泄露给模型。`examples/extra_tools/hello.py` 是一个完整例子（生成 `.ics` 日历事件）。
@@ -98,7 +98,7 @@ GET  /v1/tools
 
 POST /v1/tools/{name}
   ← {"arguments": {...}, "context": {"chat": 123, "channel": "telegram"}}      # channel: "telegram" 或 "api"
-  → 200 {"text": "给模型看的结果", "files": [{"name": "a.docx", "mime": "...", "data": "<base64>"}]}
+  → 200 {"text": "给模型看的结果", "notify": "（可选）立刻原样发给用户的一句话", "files": [{"name": "a.docx", "mime": "...", "data": "<base64>"}]}
   → 非 200 / 或带 "error"：{"error": "给模型看的原因"}
 ```
 
@@ -117,7 +117,7 @@ POST /v1/tools/{name}
 - 还不能**读取**用户发来的文件（Word / PDF / Excel 的内容）——这需要 mnemo 先支持接收文件，后续再做。
 - Excel 里的公式不在服务端计算，要在 Excel / WPS 打开时才有结果（Telegram 内置预览看不到）。
 - PowerPoint 使用 pandoc 默认模板，中文字体由 PowerPoint 自动回退；版式朴素。
-- 已验证环境：Ubuntu 24.04（pandoc 3.1、TeX Live 2023、Python 3.12）上的 52 项测试。**Dockerfile 与 GitHub Actions 的构建流程没有实际构建过**，首次构建请留意日志；`image_generate` 只对照假后端测过，没连过真实的图像服务。
+- 已验证环境：Ubuntu 24.04（pandoc 3.1、TeX Live 2023、Python 3.12）上的 53 项测试。**Dockerfile 与 GitHub Actions 的构建流程没有实际构建过**，首次构建请留意日志；`image_generate` 只对照假后端测过，没连过真实的图像服务。
 
 ### 开发
 
@@ -219,7 +219,7 @@ GET  /v1/tools
 
 POST /v1/tools/{name}
   ← {"arguments": {...}, "context": {"chat": 123, "channel": "telegram"}}      # channel: "telegram" | "api"
-  → 200 {"text": "result for the model", "files": [{"name": "a.docx", "mime": "...", "data": "<base64>"}]}
+  → 200 {"text": "result for the model", "notify": "(optional) a line sent to the user at once, verbatim", "files": [{"name": "a.docx", "mime": "...", "data": "<base64>"}]}
   → non-200, or a body with "error": {"error": "reason for the model"}
 ```
 
@@ -238,7 +238,7 @@ Tool names match `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$` and must not collide with mnemo
 - It cannot yet **read** files the user sends (Word / PDF / Excel); that needs mnemo to accept incoming files first.
 - Excel formulas are not evaluated on the server; they calculate when opened in Excel / WPS (Telegram's preview shows blanks).
 - PowerPoint uses pandoc's default template: plain layout, CJK font left to PowerPoint's fallback.
-- Verified: 52 tests on Ubuntu 24.04 (pandoc 3.1, TeX Live 2023, Python 3.12). **The Dockerfile and the GitHub Actions build have not actually been run**; watch the first build's log. `image_generate` was tested against a fake backend only, not a real image service.
+- Verified: 53 tests on Ubuntu 24.04 (pandoc 3.1, TeX Live 2023, Python 3.12). **The Dockerfile and the GitHub Actions build have not actually been run**; watch the first build's log. `image_generate` was tested against a fake backend only, not a real image service.
 
 ### Development
 

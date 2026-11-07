@@ -25,6 +25,7 @@ class File:
 class Result:
     text: str = ""
     files: list[File] = field(default_factory=list)
+    notify: str = ""      # shown to the user right away by mnemo (Telegram only), not routed through the model
 
 
 @dataclass

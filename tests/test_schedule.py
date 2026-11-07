@@ -343,3 +343,14 @@ def test_list_tool_shows_history(tmp_path):
     get_store(ctx.config).record({"label": "晨报", "id": "a1", "tz": "America/Vancouver"}, True, "ok")
     out = all_tools()["schedule_list"].func({}, ctx).text
     assert "没有待执行" in out and "已提交「晨报」" in out
+
+
+def test_add_and_remove_send_a_direct_notice(server, tmp_path):
+    srv, c = server(MNEMO_URL="http://x", MNEMO_API_KEY="k", DATA_DIR=str(tmp_path))
+    ctx = {"chat": 5, "channel": "telegram", "tz": "America/Vancouver"}
+    st, res = c.req("POST", "/v1/tools/schedule_add", {"arguments": {"label": "晨报", "prompt": "P", "time": "7:30"}, "context": ctx})
+    assert st == 200 and res["notify"].startswith("✅ 已创建定时任务") and "07:30" in res["notify"] and "晨报" in res["notify"]
+    st, res = c.req("POST", "/v1/tools/schedule_remove", {"arguments": {"target": "晨报"}, "context": ctx})
+    assert st == 200 and "晨报" in res["notify"]
+    st, res = c.req("POST", "/v1/tools/schedule_list", {"arguments": {}, "context": ctx})
+    assert st == 200 and "notify" not in res
