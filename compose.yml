@@ -1,0 +1,20 @@
+# Stand-alone. To run next to mnemo, copy the `mnemo-plugin` service into mnemo's compose file instead,
+# so that both share a network and mnemo can reach http://mnemo-plugin:8090.
+services:
+  mnemo-plugin:
+    image: ${PLUGIN_IMAGE:-cs3306/mnemo-plugin:latest}   # :latest-slim has no TeX (no PDF / LaTeX tools)
+    container_name: mnemo-plugin
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      EXTRA_TOOLS_DIR: /extra_tools
+    volumes:
+      - ./extra_tools:/extra_tools:ro        # your own tools (*.py), see README
+    ports:
+      - "127.0.0.1:8090:8090"                # remove if only other containers need it
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 2g
