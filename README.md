@@ -79,10 +79,13 @@ DEV_SSH_KEY=/run/secrets/dev_ssh      # 私钥，只读挂进来（compose: ./se
 DEV_SSH_ROOT=/workspace/ai            # 默认工作目录；cwd 参数只能在其内部
 DEV_SSH_MAX_TIMEOUT=300               # 单条命令上限（秒）
 DEV_SSH_MAX_OUTPUT_KB=32
+DEV_INBOX=inbox                      # 你发给机器人的文件存到 DEV_SSH_ROOT/inbox/
+DEV_UPLOAD_MAX_MB=20                 # 单个文件上限（Telegram 下载上限本身是 20 MB）
 ```
 
 - 首次连接时记录开发容器的主机密钥到 `$DATA_DIR/dev_known_hosts`，之后不一致就拒绝连接（容器重建且没挂 host key 卷时，删掉该文件即可）。
 - 命令在远端用 `timeout` 包裹，超时会被杀掉；输出合并 stdout/stderr，超过上限截断。
+- **接收文件**：开启 `dev_exec` 后，插件同时接收 mnemo 转发的文件（`POST /v1/files`），保存到 `$DEV_SSH_ROOT/$DEV_INBOX/`（文件名会清理，同名不覆盖，自动加 `-1`、`-2`），模型随后可以用 `dev_exec` 处理。上传也会写进审计日志。
 - 每次调用追加一行 JSON 到 `$DATA_DIR/dev_exec.log`（时间、chat、目录、命令、退出码、耗时）。
 - **安全边界**：`DEV_SSH_ROOT` 只是默认目录，不是沙箱——命令里仍可以 `cd /` 或访问该登录用户能访问的一切。真正的权限边界是 SSH 登录的那个用户：给它的权限（sudo、能写的目录）就是模型能做的事。命令输出也可能含有来自网页或文件的注入文本。
 
@@ -219,10 +222,13 @@ DEV_SSH_KEY=/run/secrets/dev_ssh      # private key, mounted read-only (compose:
 DEV_SSH_ROOT=/workspace/ai            # default working directory; the cwd argument must stay inside it
 DEV_SSH_MAX_TIMEOUT=300               # upper bound for one command, seconds
 DEV_SSH_MAX_OUTPUT_KB=32
+DEV_INBOX=inbox                       # files you send to the bot are stored in DEV_SSH_ROOT/inbox/
+DEV_UPLOAD_MAX_MB=20                  # largest accepted file (Telegram itself caps downloads at 20 MB)
 ```
 
 - The dev container's host key is recorded at first use in `$DATA_DIR/dev_known_hosts`; a later mismatch is refused (delete the file if you recreated the container without persisting its host keys).
 - Commands run under `timeout` on the remote side; stdout and stderr are merged and capped.
+- **Receiving files**: with `dev_exec` enabled the plugin also accepts files forwarded by mnemo (`POST /v1/files`) and stores them in `$DEV_SSH_ROOT/$DEV_INBOX/` (names are sanitised, an existing file is never overwritten: `-1`, `-2` is appended). The model can then work on them with `dev_exec`. Uploads are audited too.
 - Every call appends one JSON line to `$DATA_DIR/dev_exec.log` (time, chat, directory, command, exit code, duration).
 - **Security boundary**: `DEV_SSH_ROOT` is only the default directory, not a sandbox: a command can still `cd /` or touch anything the login user can. The real boundary is that user's permissions (sudo, writable directories). Command output may also contain text injected from web pages or files.
 

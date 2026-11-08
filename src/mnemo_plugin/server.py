@@ -4,6 +4,8 @@
     GET  /v1/tools                -> {"tools": [{"name", "description", "parameters"}]}
     POST /v1/tools/{name}         <- {"arguments": {...}, "context": {"chat": 1, "channel": "telegram", "tz": "America/Vancouver"}}
                                   -> {"text": "...", "files": [{"name", "mime", "data": "<base64>"}]}  or {"error": "..."}
+    POST /v1/files                <- {"name": "a.zip", "mime": "application/zip", "data": "<base64>", "context": {...}}   (a file the user sent)
+                                  -> {"text": "..."}  or {"error": "..."};  404 when no file receiver is enabled
 
 Every /v1 request needs "Authorization: Bearer $PLUGIN_TOKEN".
 """
@@ -19,7 +21,7 @@ from typing import Any
 
 from . import __version__
 from .config import Config
-from .registry import Context, Result, ToolError, active_tools, validate
+from .registry import Context, Result, ToolError, active_file_handler, active_tools, validate
 
 log = logging.getLogger("mnemo_plugin")
 
@@ -70,7 +72,45 @@ class Handler(BaseHTTPRequestHandler):
             ]})
         self._send(404, {"error": "not found"})
 
+    def _post_file(self) -> None:
+        cfg = self.server.cfg
+        if not self._authorised():
+            self._drain()
+            return self._send(401, {"error": "unauthorized"})
+        handler = active_file_handler(cfg)
+        if handler is None:
+            self._drain()
+            return self._send(404, {"error": "no file receiver enabled"})
+        limit = (cfg.dev_upload_max_mb << 20) * 4 // 3 + 8192      # base64 inflates by 4/3
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            n = -1
+        if n < 0 or n > limit:
+            self._drain()
+            return self._send(413, {"error": f"file must be at most {cfg.dev_upload_max_mb} MB"})
+        try:
+            req = json.loads(self.rfile.read(n) or b"{}")
+            name, mime, c = str(req["name"]), str(req.get("mime") or "application/octet-stream"), req.get("context") or {}
+            data = base64.b64decode(req["data"], validate=True)
+            if not isinstance(c, dict):
+                raise ValueError
+        except (ValueError, KeyError, TypeError):
+            return self._send(400, {"error": "body must be {\"name\", \"mime\", \"data\": <base64>, \"context\": {...}}"})
+        try:
+            ctx = Context(config=cfg, chat=c.get("chat") if isinstance(c.get("chat"), int) else None, channel=str(c.get("channel", "")), tz=str(c.get("tz", "")))
+            with self.server.slots:
+                res = handler.func(name, mime, data, ctx)
+        except ToolError as e:
+            return self._send(400, {"error": str(e)})
+        except Exception:
+            log.exception("file receiver %s crashed", handler.name)
+            return self._send(500, {"error": "插件内部错误，详情见服务日志"})
+        self._send(200, {"text": res.text if isinstance(res, Result) else str(res or "")})
+
     def do_POST(self) -> None:
+        if self.path == "/v1/files":
+            return self._post_file()
         prefix = "/v1/tools/"
         if not self.path.startswith(prefix):
             return self._send(404, {"error": "not found"})

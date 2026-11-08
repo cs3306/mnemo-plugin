@@ -54,6 +54,8 @@ class Config:
     dev_ssh_root: str = "/workspace/ai"      # default working directory; the cwd argument must stay inside it
     dev_ssh_max_timeout: int = 300           # upper bound for a single command, seconds
     dev_ssh_max_output_kb: int = 32
+    dev_inbox: str = "inbox"                 # where files sent to the bot land, relative to dev_ssh_root
+    dev_upload_max_mb: int = 20              # largest file accepted from the bot (Telegram itself caps downloads at 20 MB)
     errors: list = field(default_factory=list)
 
     @classmethod
@@ -90,6 +92,8 @@ class Config:
         c.dev_ssh_root = e.get("DEV_SSH_ROOT", c.dev_ssh_root).strip() or c.dev_ssh_root
         c.dev_ssh_max_timeout = max(5, _int("DEV_SSH_MAX_TIMEOUT", 300, e))
         c.dev_ssh_max_output_kb = max(1, _int("DEV_SSH_MAX_OUTPUT_KB", 32, e))
+        c.dev_inbox = e.get("DEV_INBOX", c.dev_inbox).strip().strip("/") or c.dev_inbox
+        c.dev_upload_max_mb = max(1, _int("DEV_UPLOAD_MAX_MB", 20, e))
         raw = e.get("IMAGE_EXTRA_BODY", "").strip()
         if raw:
             try:
@@ -111,6 +115,8 @@ class Config:
             errs.append("MNEMO_URL must be an http(s) URL")
         if self.dev_ssh_host and not self.dev_ssh_root.startswith("/"):
             errs.append("DEV_SSH_ROOT must be an absolute path")
+        if ".." in self.dev_inbox.split("/"):
+            errs.append("DEV_INBOX must not contain '..'")
         if self.schedule_tz:
             try:
                 from zoneinfo import ZoneInfo

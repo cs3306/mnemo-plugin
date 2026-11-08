@@ -120,3 +120,73 @@ def test_run_remote_small_output_not_truncated(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "paramiko", mod)
     cfg = Config.from_env({"DEV_SSH_HOST": "dev", "DATA_DIR": str(tmp_path)})
     assert devexec._run_remote(cfg, "/w", "echo hello", 5) == (0, b"hello\n", False)
+
+
+# ---------------------------------------------------------------------------------------------- files sent to the bot
+
+def test_safe_filename():
+    assert devexec.safe_filename("../../etc/pass wd.zip") == "pass_wd.zip"
+    assert devexec.safe_filename("C:\\Users\\a\\报告 终稿.pdf") == "报告_终稿.pdf"
+    assert devexec.safe_filename(".bashrc") == "bashrc"
+    assert devexec.safe_filename("///") == "file"
+    assert len(devexec.safe_filename("a" * 300 + ".tar.gz").encode()) <= 120
+    assert devexec.safe_filename("a" * 300 + ".tar.gz").endswith(".tar.gz")
+
+
+def test_upload_command_never_overwrites(tmp_path):
+    import subprocess
+
+    inbox = tmp_path / "in"
+    cmd = devexec.build_upload_command(str(inbox), "a b'; rm -rf x.tar.gz".replace(" ", "_"))
+    names = []
+    for i in range(3):
+        r = subprocess.run(["bash", "-c", cmd], input=f"d{i}".encode(), capture_output=True)
+        assert r.returncode == 0, r.stderr
+        names.append(r.stdout.decode())
+    assert len(set(names)) == 3 and names[1].endswith(".tar.gz") and "-1" in names[1]
+    assert sorted(p.read_text() for p in inbox.iterdir()) == ["d0", "d1", "d2"]      # no temp files left behind
+
+
+@pytest.fixture
+def inbox_server(server, tmp_path, monkeypatch):
+    key = tmp_path / "key"
+    key.write_text("x")
+    monkeypatch.setitem(sys.modules, "paramiko", types.ModuleType("paramiko"))
+    saved = []
+
+    def fake_upload(cfg, inbox, name, data):
+        saved.append((inbox, name, data))
+        return name
+
+    monkeypatch.setattr(devexec, "_upload_remote", fake_upload)
+    _, c = server(DEV_SSH_HOST="dev", DEV_SSH_KEY=str(key), DATA_DIR=str(tmp_path), DEV_UPLOAD_MAX_MB="1")
+    return c, saved, tmp_path
+
+
+def _post_file(c, name, data, **kw):
+    import base64
+
+    return c.req("POST", "/v1/files", {"name": name, "mime": "text/plain", "data": base64.b64encode(data).decode(), "context": {"chat": 7, "channel": "telegram"}}, **kw)
+
+
+def test_file_upload_saves_into_inbox_and_audits(inbox_server):
+    c, saved, data = inbox_server
+    code, res = _post_file(c, "../x y.txt", b"hello")
+    assert code == 200 and res["text"].startswith("已保存到开发容器：/workspace/ai/inbox/x_y.txt")
+    assert saved == [("/workspace/ai/inbox", "x_y.txt", b"hello")]
+    rec = json.loads((data / "dev_exec.log").read_text().splitlines()[-1])
+    assert rec["command"].startswith("[upload] x_y.txt") and rec["exit"] == 0
+
+
+def test_file_upload_auth_size_and_bad_body(inbox_server):
+    c, saved, _ = inbox_server
+    assert _post_file(c, "a.txt", b"x", token=None)[0] == 401
+    assert _post_file(c, "a.bin", b"\0" * (2 << 20))[0] == 413            # limit is 1 MB here
+    assert c.req("POST", "/v1/files", raw=b"{}")[0] == 400
+    assert c.req("POST", "/v1/files", {"name": "a", "data": "!!!not base64"})[0] == 400
+    assert saved == []
+
+
+def test_file_upload_404_when_dev_container_not_configured(server):
+    _, c = server()
+    assert _post_file(c, "a.txt", b"x")[0] == 404

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import posixpath
+import re
 import shlex
 import socket
 import threading
@@ -14,7 +15,7 @@ import time
 from pathlib import Path
 
 from ..config import Config
-from ..registry import Context, Result, ToolError, tool
+from ..registry import Context, Result, ToolError, file_handler, tool
 
 log = logging.getLogger("mnemo_plugin")
 _audit_lock = threading.Lock()
@@ -150,3 +151,73 @@ def dev_exec(args: dict, ctx: Context) -> Result:
     if truncated:
         out += f"\n…（输出超过 {cfg.dev_ssh_max_output_kb} KB，已截断）"
     return Result(text=f"{head}\n{out}" if out else f"{head}\n（无输出）")
+
+
+# ------------------------------------------------------------------------------------------ files the user sends to the bot
+
+_MAX_NAME_BYTES = 120
+
+
+def safe_filename(name: str) -> str:
+    """A harmless file name: no directories, no control characters, no leading dots, no spaces, bounded length."""
+    name = name.replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(ch for ch in name if ch >= " " and ch != "\x7f")
+    name = re.sub(r"\s+", "_", name.strip()).lstrip(".")
+    stem, ext = posixpath.splitext(name)
+    if stem.endswith(".tar"):
+        stem, ext = stem[:-4], ".tar" + ext
+    while len((stem + ext).encode()) > _MAX_NAME_BYTES and stem:
+        stem = stem[:-1]
+    return (stem + ext) or "file"
+
+
+def build_upload_command(inbox: str, name: str) -> str:
+    """Reads the file from stdin into a temp file, then hard-links it to NAME (or NAME-1, NAME-2, ...) so an existing file is never
+    overwritten. Prints the final name."""
+    stem, ext = posixpath.splitext(name)
+    if stem.endswith(".tar"):
+        stem, ext = stem[:-4], ".tar" + ext
+    return (
+        f"set -e; mkdir -p {shlex.quote(inbox)}; cd {shlex.quote(inbox)}; chmod 2775 . 2>/dev/null || true; "
+        "tmp=$(mktemp .upload.XXXXXX); trap 'rm -f \"$tmp\"' EXIT; cat > \"$tmp\"; chmod 664 \"$tmp\"; "
+        f"stem={shlex.quote(stem)}; ext={shlex.quote(ext)}; final=\"$stem$ext\"; i=0; "
+        "while ! ln \"$tmp\" \"$final\" 2>/dev/null; do i=$((i+1)); [ $i -le 99 ] || { echo 'too many files with this name' >&2; exit 1; }; final=\"$stem-$i$ext\"; done; "
+        "printf '%s' \"$final\""
+    )
+
+
+def _upload_remote(cfg: Config, inbox: str, name: str, data: bytes) -> str:
+    """Stores data in the dev container's inbox and returns the final file name."""
+    c = _connect(cfg)
+    try:
+        stdin, stdout, stderr = c.exec_command(build_upload_command(inbox, name), timeout=60)
+        stdin.write(data)
+        stdin.channel.shutdown_write()
+        out = stdout.read().decode("utf-8", errors="replace").strip()
+        err = stderr.read().decode("utf-8", errors="replace").strip()
+        if stdout.channel.recv_exit_status() != 0 or not out:
+            raise ToolError(f"保存到开发容器失败：{err[:200] or '未知错误'}")
+        return out
+    except (OSError, socket.timeout) as e:
+        raise ToolError(f"上传到开发容器失败：{type(e).__name__}: {e}") from None
+    finally:
+        c.close()
+
+
+@file_handler("dev_inbox", available=_available)
+def dev_inbox(name: str, mime: str, data: bytes, ctx: Context) -> Result:
+    cfg = ctx.config
+    if len(data) > cfg.dev_upload_max_mb << 20:
+        raise ToolError(f"文件超过 {cfg.dev_upload_max_mb} MB 上限")
+    safe = safe_filename(name)
+    inbox = resolve_cwd(cfg.dev_ssh_root, cfg.dev_inbox)
+    t0 = time.monotonic()
+    try:
+        final = _upload_remote(cfg, inbox, safe, data)
+    except ToolError as e:
+        _audit(cfg, ctx, inbox, f"[upload] {safe} ({len(data)} bytes)", None, time.monotonic() - t0, str(e))
+        raise
+    _audit(cfg, ctx, inbox, f"[upload] {final} ({len(data)} bytes)", 0, time.monotonic() - t0)
+    kb = len(data) / 1024
+    size = f"{kb / 1024:.1f} MB" if kb >= 1024 else f"{kb:.1f} KB"
+    return Result(text=f"已保存到开发容器：{posixpath.join(inbox, final)}（{size}）")

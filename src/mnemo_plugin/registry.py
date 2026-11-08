@@ -49,6 +49,33 @@ class Tool:
 _TOOLS: dict[str, Tool] = {}
 
 
+@dataclass
+class FileHandler:
+    """Receives files the user sends to the bot (mnemo forwards them to POST /v1/files)."""
+    name: str
+    func: Callable[[str, str, bytes, Context], Result]    # (file name, mime, data, ctx) -> Result(text=what the model is told)
+    available: Callable[[Config], str | None] = lambda cfg: None
+
+
+_FILE_HANDLERS: list[FileHandler] = []
+
+
+def file_handler(name: str, available: Callable[[Config], str | None] | None = None):
+    """Register a receiver for incoming files. The first available one gets each file."""
+    def deco(fn):
+        _FILE_HANDLERS.append(FileHandler(name, fn, available or (lambda cfg: None)))
+        return fn
+
+    return deco
+
+
+def active_file_handler(cfg: Config) -> FileHandler | None:
+    for h in _FILE_HANDLERS:
+        if not h.available(cfg):
+            return h
+    return None
+
+
 def tool(name: str, description: str, parameters: dict | None = None, available: Callable[[Config], str | None] | None = None):
     """Register a function as a tool.
 
