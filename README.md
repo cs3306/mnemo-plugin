@@ -19,6 +19,7 @@
 | `latex_create` | 编译完整 `.tex`（xelatex / lualatex / pdflatex），失败时把日志里的错误返回给模型重试，成功时 PDF 与源码一起发出 | TeX Live |
 | `image_generate` | 调用 OpenAI 兼容的 `/images/generations`（本地 Stable Diffusion / FLUX 网关等） | 需要你自己有图像后端 |
 | `schedule_add` / `schedule_list` / `schedule_remove` | 定时任务：对 bot 说“每天 7:30 给我发晨报，内容是……”，它自己建；说“取消晨报”就删。到点由本服务调用 mnemo 的 `/v1/trigger`，bot 带着记忆、搜索和其它工具完成任务并发到 Telegram | mnemo 开启 API（`MNEMO_URL`、`MNEMO_API_KEY`）+ 数据卷 |
+| `dev_exec` | 通过 SSH 在你的开发容器里执行一条命令（编译、跑测试、处理文件），返回退出码和输出；每次调用都写审计日志 | `DEV_SSH_HOST` + 私钥 + paramiko（镜像已带） |
 
 DeepSeek 没有图像生成模型，所以 `image_generate` 只有在设置了 `IMAGE_BASE_URL` 时才出现。缺少依赖的工具不会出现在列表里，原因见 `GET /healthz`。
 
@@ -66,6 +67,24 @@ SCHEDULE_GRACE_MIN=120            # 服务停机错过的任务，在这个窗�
 ```
 
 任务存在 `$DATA_DIR/schedules.json`（原子写入）。支持“每天”、“每周几”、“某天一次”，精度到分钟，最多 20 个；mnemo 暂时连不上时指数退避重试，4xx（如密钥错误）不重试并记在 `last_error`（`schedule_list` 可见）。**到点跑的 prompt 是模型当时写下的**，其中可能混入网页里的注入内容，所以建任务后用 `schedule_list` 看一眼完整指令。
+
+### 在开发容器里执行命令（`dev_exec`）
+
+让模型能在你自己的开发容器里编译、运行代码、跑测试。默认关闭，设置 `DEV_SSH_HOST` 后出现：
+
+```
+DEV_SSH_HOST=ubuntu-dev-webtop        # 同一个 docker 网络里的主机名
+DEV_SSH_USER=abc
+DEV_SSH_KEY=/run/secrets/dev_ssh      # 私钥，只读挂进来（compose: ./secrets/dev_ssh:/run/secrets/dev_ssh:ro）
+DEV_SSH_ROOT=/workspace/ai            # 默认工作目录；cwd 参数只能在其内部
+DEV_SSH_MAX_TIMEOUT=300               # 单条命令上限（秒）
+DEV_SSH_MAX_OUTPUT_KB=32
+```
+
+- 首次连接时记录开发容器的主机密钥到 `$DATA_DIR/dev_known_hosts`，之后不一致就拒绝连接（容器重建且没挂 host key 卷时，删掉该文件即可）。
+- 命令在远端用 `timeout` 包裹，超时会被杀掉；输出合并 stdout/stderr，超过上限截断。
+- 每次调用追加一行 JSON 到 `$DATA_DIR/dev_exec.log`（时间、chat、目录、命令、退出码、耗时）。
+- **安全边界**：`DEV_SSH_ROOT` 只是默认目录，不是沙箱——命令里仍可以 `cd /` 或访问该登录用户能访问的一切。真正的权限边界是 SSH 登录的那个用户：给它的权限（sudo、能写的目录）就是模型能做的事。命令输出也可能含有来自网页或文件的注入文本。
 
 ### 自己写工具
 
@@ -188,6 +207,24 @@ SCHEDULE_GRACE_MIN=120            # a task missed while this server was down is 
 ```
 
 Tasks live in `$DATA_DIR/schedules.json` (atomic writes). Daily, weekly (chosen weekdays) or one-off, minute precision, at most 20. If mnemo is unreachable the call is retried with exponential backoff; 4xx (e.g. wrong key) is not retried and shows up as `last_error` in `schedule_list`. **The prompt that runs is whatever the model wrote at creation time** and may contain text injected from a web page, so check the full instruction with `schedule_list` after creating a task.
+
+### Running commands in a dev container (`dev_exec`)
+
+Lets the model build, run code and run tests in your own development container. Off by default; it appears once `DEV_SSH_HOST` is set:
+
+```
+DEV_SSH_HOST=ubuntu-dev-webtop        # host name on a shared docker network
+DEV_SSH_USER=abc
+DEV_SSH_KEY=/run/secrets/dev_ssh      # private key, mounted read-only (compose: ./secrets/dev_ssh:/run/secrets/dev_ssh:ro)
+DEV_SSH_ROOT=/workspace/ai            # default working directory; the cwd argument must stay inside it
+DEV_SSH_MAX_TIMEOUT=300               # upper bound for one command, seconds
+DEV_SSH_MAX_OUTPUT_KB=32
+```
+
+- The dev container's host key is recorded at first use in `$DATA_DIR/dev_known_hosts`; a later mismatch is refused (delete the file if you recreated the container without persisting its host keys).
+- Commands run under `timeout` on the remote side; stdout and stderr are merged and capped.
+- Every call appends one JSON line to `$DATA_DIR/dev_exec.log` (time, chat, directory, command, exit code, duration).
+- **Security boundary**: `DEV_SSH_ROOT` is only the default directory, not a sandbox: a command can still `cd /` or touch anything the login user can. The real boundary is that user's permissions (sudo, writable directories). Command output may also contain text injected from web pages or files.
 
 ### Writing your own tools
 

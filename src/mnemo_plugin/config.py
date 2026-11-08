@@ -47,6 +47,13 @@ class Config:
     data_dir: str = "/data"          # persistent state (schedules.json); mount a volume here
     schedule_tz: str = ""            # fallback time zone when mnemo does not send one ("" = UTC)
     schedule_grace_min: int = 120    # a task missed by more than this (e.g. server was down) is skipped, not run late
+    dev_ssh_host: str = ""           # dev container to run commands in (dev_exec); empty disables the tool
+    dev_ssh_port: int = 22
+    dev_ssh_user: str = "abc"
+    dev_ssh_key: str = "/run/secrets/dev_ssh"
+    dev_ssh_root: str = "/workspace/ai"      # default working directory; the cwd argument must stay inside it
+    dev_ssh_max_timeout: int = 300           # upper bound for a single command, seconds
+    dev_ssh_max_output_kb: int = 32
     errors: list = field(default_factory=list)
 
     @classmethod
@@ -76,6 +83,13 @@ class Config:
         c.data_dir = e.get("DATA_DIR", c.data_dir).strip() or c.data_dir
         c.schedule_tz = e.get("SCHEDULE_TZ", "").strip()
         c.schedule_grace_min = max(1, _int("SCHEDULE_GRACE_MIN", 120, e))
+        c.dev_ssh_host = e.get("DEV_SSH_HOST", "").strip()
+        c.dev_ssh_port = max(1, _int("DEV_SSH_PORT", 22, e))
+        c.dev_ssh_user = e.get("DEV_SSH_USER", c.dev_ssh_user).strip() or c.dev_ssh_user
+        c.dev_ssh_key = e.get("DEV_SSH_KEY", c.dev_ssh_key).strip() or c.dev_ssh_key
+        c.dev_ssh_root = e.get("DEV_SSH_ROOT", c.dev_ssh_root).strip() or c.dev_ssh_root
+        c.dev_ssh_max_timeout = max(5, _int("DEV_SSH_MAX_TIMEOUT", 300, e))
+        c.dev_ssh_max_output_kb = max(1, _int("DEV_SSH_MAX_OUTPUT_KB", 32, e))
         raw = e.get("IMAGE_EXTRA_BODY", "").strip()
         if raw:
             try:
@@ -95,6 +109,8 @@ class Config:
             errs.append("IMAGE_BASE_URL must be an http(s) URL")
         if self.mnemo_url and not self.mnemo_url.startswith(("http://", "https://")):
             errs.append("MNEMO_URL must be an http(s) URL")
+        if self.dev_ssh_host and not self.dev_ssh_root.startswith("/"):
+            errs.append("DEV_SSH_ROOT must be an absolute path")
         if self.schedule_tz:
             try:
                 from zoneinfo import ZoneInfo

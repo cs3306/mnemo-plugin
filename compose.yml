@@ -10,7 +10,8 @@ services:
       EXTRA_TOOLS_DIR: /extra_tools
     volumes:
       - ./extra_tools:/extra_tools:ro        # your own tools (*.py), see README
-      - plugin-data:/data                    # scheduled tasks (schedules.json)
+      - plugin-data:/data                    # scheduled tasks (schedules.json), dev_exec audit log
+      # - ./secrets/dev_ssh:/run/secrets/dev_ssh:ro   # private key for dev_exec (also set DEV_SSH_HOST in .env)
     ports:
       - "127.0.0.1:8090:8090"                # remove if only other containers need it
     read_only: true
