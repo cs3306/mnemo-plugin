@@ -1,11 +1,13 @@
 """The plugin protocol, as seen from the server side:
 
     GET  /healthz                 -> {"ok": true, ...}                     (no auth)
-    GET  /v1/tools                -> {"tools": [{"name", "description", "parameters"}]}
+    GET  /v1/tools                -> {"tools": [{"name", "description", "parameters"}], "events": ["user_message", ...]}
     POST /v1/tools/{name}         <- {"arguments": {...}, "context": {"chat": 1, "channel": "telegram", "tz": "America/Vancouver"}}
                                   -> {"text": "...", "files": [{"name", "mime", "data": "<base64>"}]}  or {"error": "..."}
     POST /v1/files                <- {"name": "a.zip", "mime": "application/zip", "data": "<base64>", "context": {...}}   (a file the user sent)
                                   -> {"text": "..."}  or {"error": "..."};  404 when no file receiver is enabled
+    POST /v1/events               <- {"type": "turn_done", "chat": 1, "channel": "telegram", "at": "<RFC3339>", "tz": "...", "data": {...}}
+                                  -> 204 (handlers registered with @event run; none registered = ignored)
 
 Every /v1 request needs "Authorization: Bearer $PLUGIN_TOKEN".
 """
@@ -21,7 +23,7 @@ from typing import Any
 
 from . import __version__
 from .config import Config
-from .registry import Context, Result, ToolError, active_file_handler, active_tools, validate
+from .registry import Context, Result, ToolError, active_file_handler, active_tools, event_handlers, event_types, validate
 
 log = logging.getLogger("mnemo_plugin")
 
@@ -69,7 +71,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, {"error": "unauthorized"})
             return self._send(200, {"tools": [
                 {"name": t.name, "description": t.description, "parameters": t.parameters} for t in self.server.tools.values()
-            ]})
+            ], "events": event_types()})
         self._send(404, {"error": "not found"})
 
     def _post_file(self) -> None:
@@ -108,9 +110,41 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"error": "插件内部错误，详情见服务日志"})
         self._send(200, {"text": res.text if isinstance(res, Result) else str(res or "")})
 
+    def _post_event(self) -> None:
+        if not self._authorised():
+            self._drain()
+            return self._send(401, {"error": "unauthorized"})
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            n = -1
+        if n < 0 or n > (64 << 10):
+            self._drain()
+            return self._send(413, {"error": "event body must be at most 64 KB"})
+        try:
+            ev = json.loads(self.rfile.read(n) or b"{}")
+            typ = ev["type"]
+            if not isinstance(ev, dict) or not isinstance(typ, str):
+                raise ValueError
+        except (ValueError, KeyError, TypeError):
+            return self._send(400, {"error": "body must be {\"type\": \"...\", \"chat\": 123, ...}"})
+        chat = ev.get("chat")
+        ctx = Context(config=self.server.cfg, chat=chat if isinstance(chat, int) else None,
+                      channel=str(ev.get("channel", "")), tz=str(ev.get("tz", "")))
+        for h in event_handlers(typ):
+            try:
+                h.func(ev, ctx)
+            except Exception:  # a broken handler must not make mnemo see a failure
+                log.exception("event handler %s crashed on %s", h.name, typ)
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_POST(self) -> None:
         if self.path == "/v1/files":
             return self._post_file()
+        if self.path == "/v1/events":
+            return self._post_event()
         prefix = "/v1/tools/"
         if not self.path.startswith(prefix):
             return self._send(404, {"error": "not found"})

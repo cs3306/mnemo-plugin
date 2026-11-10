@@ -76,6 +76,47 @@ def active_file_handler(cfg: Config) -> FileHandler | None:
     return None
 
 
+@dataclass
+class EventHandler:
+    """Wants to hear about conversation events that mnemo announces (POST /v1/events, needs PLUGIN_EVENTS in mnemo)."""
+    name: str
+    types: frozenset
+    func: Callable[[dict, Context], None]     # (event, ctx); keep it fast, hand real work to your own thread
+
+
+_EVENT_HANDLERS: list[EventHandler] = []
+
+
+def event(*types: str):
+    """Register a handler for mnemo's conversation events.
+
+        @event("user_message", "turn_done")
+        def on_event(ev, ctx):          # ev: {"type", "chat", "channel", "at", "tz", "data": {...}}
+            ...
+
+    The types are announced to mnemo in GET /v1/tools ("events"); mnemo only sends the ones its operator allowed in
+    PLUGIN_EVENTS. Known types: user_message, turn_done, startup. Handlers run inside the request, so they must return
+    quickly; an exception is logged and never reaches mnemo.
+    """
+    if not types or not all(isinstance(t, str) and t for t in types):
+        raise ValueError("event() needs at least one event type name")
+
+    def deco(fn):
+        _EVENT_HANDLERS.append(EventHandler(fn.__name__, frozenset(types), fn))
+        return fn
+
+    return deco
+
+
+def event_types() -> list[str]:
+    """Every event type some handler asked for (sorted)."""
+    return sorted({t for h in _EVENT_HANDLERS for t in h.types})
+
+
+def event_handlers(typ: str) -> list[EventHandler]:
+    return [h for h in _EVENT_HANDLERS if typ in h.types]
+
+
 def tool(name: str, description: str, parameters: dict | None = None, available: Callable[[Config], str | None] | None = None):
     """Register a function as a tool.
 

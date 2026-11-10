@@ -108,6 +108,17 @@ def word_count(args, ctx):          # ctx.chat / ctx.channel / ctx.config
 
 参数按 JSON Schema 的常用子集校验（type、required、enum、items、minItems/maxItems、maxLength），出错时模型会看到明确的中文提示。抛出 `ToolError("原因")` 会把原因原样交给模型，让它修正后重试；其他异常只写日志，不泄露给模型。`examples/extra_tools/hello.py` 是一个完整例子（生成 `.ics` 日历事件）。
 
+**接收对话事件**（可选）：插件还可以知道对话里发生了什么——例如沉默跟进要在用户发消息时重置计时。写一个函数用 `@event` 注册即可，事件类型会通过 `GET /v1/tools` 的 `events` 字段告诉 mnemo；mnemo 的运营者还需要在 `PLUGIN_EVENTS` 里放行对应类型（默认全部不发），双方都同意才会收到。
+
+```python
+from mnemo_plugin import event
+
+@event("user_message", "turn_done")
+def on_event(ev, ctx):     # ev: {"type","chat","channel","at","tz","data":{…}}；ctx.chat / ctx.tz / ctx.config
+    ...                     # 要快速返回；耗时的事交给自己的线程。抛出的异常只写日志，不会让 mnemo 看到失败
+```
+类型有 `user_message`（用户发来了消息，`data.kind`）、`turn_done`（一轮结束，`data.origin`、`data.replied`）、`startup`。消息正文不会发给插件。想主动让 mnemo 说话时，用 `ctx.config.mnemo_url` / `mnemo_api_key` 调用它的 `POST /v1/trigger`（和 `schedule_*` 一样）。
+
 **任何语言**：只需实现下面三个 HTTP 接口，然后把它的地址加进 mnemo 的 `PLUGIN_URLS`（逗号分隔，可以有多个插件服务）。
 
 ### 协议（v1）
@@ -116,12 +127,17 @@ def word_count(args, ctx):          # ctx.chat / ctx.channel / ctx.config
 
 ```
 GET  /v1/tools
-  → {"tools": [{"name": "word_count", "description": "...", "parameters": {<JSON Schema, type=object>}}]}
+  → {"tools": [{"name": "word_count", "description": "...", "parameters": {<JSON Schema, type=object>}}],
+     "events": ["user_message", "turn_done"]}        # "events" 可选：想收到哪些对话事件，见上
 
 POST /v1/tools/{name}
   ← {"arguments": {...}, "context": {"chat": 123, "channel": "telegram"}}      # channel: "telegram" 或 "api"
   → 200 {"text": "给模型看的结果", "notify": "（可选）立刻原样发给用户的一句话", "files": [{"name": "a.docx", "mime": "...", "data": "<base64>"}]}
   → 非 200 / 或带 "error"：{"error": "给模型看的原因"}
+
+POST /v1/events                                                               # 可选，只有声明了 "events" 才会收到
+  ← {"type": "turn_done", "chat": 123, "channel": "telegram", "at": "<RFC3339>", "tz": "America/Vancouver", "data": {...}}
+  → 2xx（或 404 表示不关心）
 ```
 
 工具名 `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`，不能与 mnemo 内置工具（`web_search`、`web_fetch`）重名；多个服务提供同名工具时先发现的生效。`channel` 为 `api` 时文件不会被送达（OpenAI 兼容 API 没有文件通道），mnemo 会告诉模型“已生成但无法发送”。单次最多 8 个文件，单个文件 40 MB 以内。
@@ -250,6 +266,17 @@ def word_count(args, ctx):          # ctx.chat / ctx.channel / ctx.config
 
 Arguments are validated against a common JSON-Schema subset (type, required, enum, items, minItems/maxItems, maxLength) with clear messages for the model. Raising `ToolError("reason")` hands the reason to the model so it can fix the call; any other exception is logged and never shown to the model. `examples/extra_tools/hello.py` is a complete example (`.ics` calendar events).
 
+**Receiving conversation events** (optional): a plugin can also learn what happens in the conversation, e.g. an idle follow-up needs to reset its timer when the user writes. Register a function with `@event`; the types are announced to mnemo in the `events` field of `GET /v1/tools`, and mnemo's operator must also allow them in `PLUGIN_EVENTS` (nothing is sent by default). Both sides have to agree.
+
+```python
+from mnemo_plugin import event
+
+@event("user_message", "turn_done")
+def on_event(ev, ctx):     # ev: {"type","chat","channel","at","tz","data":{…}}; ctx.chat / ctx.tz / ctx.config
+    ...                     # return quickly and hand slow work to your own thread; exceptions are logged, mnemo never sees them
+```
+Types: `user_message` (the user wrote, `data.kind`), `turn_done` (a turn finished, `data.origin`, `data.replied`), `startup`. Message text is never sent. To make mnemo speak first, call its `POST /v1/trigger` with `ctx.config.mnemo_url` / `mnemo_api_key` (the same way `schedule_*` does).
+
 **Any language**: implement the three HTTP endpoints below and add the URL to mnemo's `PLUGIN_URLS` (comma-separated; several plugin servers are fine).
 
 ### Protocol (v1)
@@ -258,12 +285,17 @@ Every `/v1` request carries `Authorization: Bearer <PLUGIN_TOKEN>`.
 
 ```
 GET  /v1/tools
-  → {"tools": [{"name": "word_count", "description": "...", "parameters": {<JSON Schema, type=object>}}]}
+  → {"tools": [{"name": "word_count", "description": "...", "parameters": {<JSON Schema, type=object>}}],
+     "events": ["user_message", "turn_done"]}        # "events" is optional: which conversation events you want, see above
 
 POST /v1/tools/{name}
   ← {"arguments": {...}, "context": {"chat": 123, "channel": "telegram"}}      # channel: "telegram" | "api"
   → 200 {"text": "result for the model", "notify": "(optional) a line sent to the user at once, verbatim", "files": [{"name": "a.docx", "mime": "...", "data": "<base64>"}]}
   → non-200, or a body with "error": {"error": "reason for the model"}
+
+POST /v1/events                                                               # optional; only sent if you declared "events"
+  ← {"type": "turn_done", "chat": 123, "channel": "telegram", "at": "<RFC3339>", "tz": "America/Vancouver", "data": {...}}
+  → any 2xx (or 404 = not interested)
 ```
 
 Tool names match `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$` and must not collide with mnemo's built-ins (`web_search`, `web_fetch`); if two servers offer the same name, the first one discovered wins. On the `api` channel files cannot be delivered (the OpenAI-compatible API has no file channel), and mnemo tells the model so. At most 8 files per call, 40 MB each.
